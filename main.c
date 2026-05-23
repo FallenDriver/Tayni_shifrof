@@ -4,6 +4,9 @@
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/ec.h>
+#include <openssl/kdf.h>
+#include <openssl/core_names.h>
+#include <openssl/hmac.h>
 
 
 EVP_PKEY* generate_key() {
@@ -56,6 +59,43 @@ unsigned char *secret_generation(EVP_PKEY *private_key, EVP_PKEY *public_key, in
     return secret;
 }
 
+
+
+void key_derive(unsigned char *secret, size_t secret_len, unsigned char *enc_key, unsigned char *sig_key) {
+
+    char *salt_str = "protocol-salt";
+    unsigned char *salt = (unsigned char *)salt_str;
+    size_t salt_len = strlen(salt_str);
+
+    unsigned char prk[32];
+    unsigned int prk_len = 32;
+
+    HMAC(EVP_sha256(), salt, salt_len, secret, secret_len, prk, &prk_len);
+
+    char *info_enc = "enc";
+    size_t info_enc_len = strlen(info_enc);
+
+    char *info_sig = "sig";
+    size_t info_sig_len = strlen(info_sig);
+
+    char input_enc[33];
+    memcpy(input_enc, info_enc, info_enc_len);
+    input_enc[info_enc_len] = 0x01;
+
+    unsigned int len_out = 32;
+    HMAC(EVP_sha256(), prk, prk_len, input_enc, info_enc_len + 1, enc_key, &len_out);
+
+
+
+    char input_sig[33];
+    memcpy(input_sig, info_sig, info_sig_len);
+    input_sig[info_sig_len] = 0x01;
+
+    HMAC(EVP_sha256(), prk, prk_len, input_sig, info_sig_len + 1, sig_key, &len_out);
+}
+    
+
+
 int main() {
     
     if (OPENSSL_init_crypto(0, NULL) != 1) {
@@ -86,6 +126,21 @@ int main() {
     }
 
 
+    unsigned char enc_key[32];
+    unsigned char sig_key[32];
+
+    key_derive(mikhail_secret, m_len, enc_key, sig_key);
+
+    printf("Enc-ключ: ");
+    for (int i = 0; i < 32; i++) {
+        printf("%02x", enc_key[i]);
+    }
+
+    printf("\nSig-ключ: ");
+    for (int i = 0; i < 32; i++) {
+        printf("%02x", sig_key[i]);
+    }
+    printf("\n");
     
     EVP_PKEY_free(mikhail_key);
     EVP_PKEY_free(alexandra_key);
