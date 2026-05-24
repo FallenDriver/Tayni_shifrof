@@ -7,6 +7,7 @@
 #include <openssl/kdf.h>
 #include <openssl/core_names.h>
 #include <openssl/hmac.h>
+#include <openssl/rand.h>
 
 
 EVP_PKEY* generate_key() {
@@ -59,8 +60,6 @@ unsigned char *secret_generation(EVP_PKEY *private_key, EVP_PKEY *public_key, in
     return secret;
 }
 
-
-
 void key_derive(unsigned char *secret, size_t secret_len, unsigned char *enc_key, unsigned char *sig_key) {
 
     char *salt_str = "protocol-salt";
@@ -94,7 +93,51 @@ void key_derive(unsigned char *secret, size_t secret_len, unsigned char *enc_key
     HMAC(EVP_sha256(), prk, prk_len, input_sig, info_sig_len + 1, sig_key, &len_out);
 }
     
+void encrypt_message(unsigned char *enc_key, unsigned char *text, int text_len, unsigned char *aad, int aad_len, unsigned char *IV, unsigned char *ciphertext, unsigned char *tag) {
+    int len = 0;
 
+    RAND_bytes(IV, 12);
+
+    EVP_CIPHER_CTX *ctx;
+    ctx = EVP_CIPHER_CTX_new();
+
+    EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL);
+
+    EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL);
+    EVP_EncryptInit_ex(ctx, NULL, NULL, enc_key, IV);
+
+    EVP_EncryptUpdate(ctx, NULL, &len, aad, aad_len);
+
+    EVP_EncryptUpdate(ctx, ciphertext, &len, text, text_len);
+
+    EVP_EncryptFinal_ex(ctx, NULL, &len);
+
+    EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag);
+
+    EVP_CIPHER_CTX_free(ctx);
+}
+
+unsigned char *sign_message(EVP_PKEY *private_key, unsigned char *data, int data_len, int *res) {
+    size_t len = 0;
+
+    EVP_MD_CTX *ctx;
+    ctx = EVP_MD_CTX_new();
+
+    EVP_DigestSignInit(ctx, NULL, EVP_sha256(), NULL, private_key);
+
+    EVP_DigestSignUpdate(ctx, data, data_len);
+
+    EVP_DigestSignFinal(ctx, NULL, &len);
+
+    unsigned char *signature = malloc(len);
+    *res = (int)len;
+
+    EVP_DigestSignFinal(ctx, signature, &len);
+
+    EVP_MD_CTX_free(ctx);
+
+    return signature;
+}
 
 int main() {
     
@@ -141,7 +184,48 @@ int main() {
         printf("%02x", sig_key[i]);
     }
     printf("\n");
+
+    unsigned char IV[12];
+    unsigned char tag[16];
+    unsigned char *text = (unsigned char *)"Здарова!";
+    int text_len = strlen((char *)text);
+
+    unsigned char *aad = (unsigned char *)"Михаил->Александра";
+    int aad_len = strlen((char *)aad);
+
+    unsigned char ciphertext[text_len];
+
+    encrypt_message(enc_key, text, text_len, aad, aad_len, IV, ciphertext, tag);
+
+    printf("IV: ");
+    for (int i = 0; i < 12; i++) {
+        printf("%02x", IV[i]);
+    }
+    printf("\nCiphertext: ");
+    for (int i = 0; i < text_len; i++) {
+        printf("%02x", ciphertext[i]);
+    }
+    printf("\nTag: ");
+    for (int i = 0; i < 16; i++) {
+        printf("%02x", tag[i]);
+    }
+    printf("\n");
+
+    int data_len = 12 + text_len + 16;
+
+    unsigned char *data = malloc(data_len);
+
+    memcpy(data, IV, 12);
+    memcpy(data + 12, ciphertext, text_len);
+    memcpy(data + 12 + text_len, tag, 16);
+
+    int sig_len = 0;
+    unsigned char *signature = sign_message(mikhail_key, data, data_len, &sig_len);
+
+    printf("Длинна подписи: %d\n", sig_len);
     
+    free(data);
+    free(signature);
     EVP_PKEY_free(mikhail_key);
     EVP_PKEY_free(alexandra_key);
     free(mikhail_secret);
